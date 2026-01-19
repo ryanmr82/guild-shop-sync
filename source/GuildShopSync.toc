@@ -1,0 +1,6 @@
+## Interface: 11200
+## Title: GuildShopSync
+## Notes: Scans AH prices and syncs to guild website
+## SavedVariables: GuildShopSyncDB
+## Version: 2.5
+GuildShopSync.lua

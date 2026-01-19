@@ -1,0 +1,31 @@
+# SignPath configuration file
+# See https://about.signpath.io/documentation/signing-code
+
+version: v1
+
+signing-policies:
+  - name: test-signing
+    slug: test-signing
+    permissions:
+      - github-branches:
+          - main
+          - develop
+          - "feature/*"
+
+  - name: release-signing
+    slug: release-signing
+    permissions:
+      - github-tags:
+          - "v*"
+
+artifact-configurations:
+  - name: GuildShopSync-Installer
+    signing-profile: standard
+    artifact-type: directory
+    include:
+      - "output/*.exe"
+    signing-steps:
+      - use-signing-profile:
+          name: standard-installer
+          for-each:
+            - "**/*.exe"
