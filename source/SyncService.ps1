@@ -1,8 +1,61 @@
-# GuildShopSync Background Service
+# GuildShopSync Background Service v2.6
 # Watches for price scans and automatically uploads to guild website
 
 $ApiUrl = "https://tbcguild.duckdns.org/api/consumes/prices"
-$WatchPath = $env:GUILDSHOPSYNC_WOWPATH + "\WTF\Account"
+
+# Get WoW path - try multiple sources for reliability
+function Get-WoWPath {
+    # 1. Try Registry first (set by installer)
+    try {
+        $regPath = Get-ItemProperty -Path "HKCU:\Software\GuildShopSync" -Name "WoWPath" -ErrorAction SilentlyContinue
+        if ($regPath -and $regPath.WoWPath -and (Test-Path $regPath.WoWPath)) {
+            return $regPath.WoWPath
+        }
+    } catch {}
+
+    # 2. Try environment variable (legacy)
+    if ($env:GUILDSHOPSYNC_WOWPATH -and (Test-Path $env:GUILDSHOPSYNC_WOWPATH)) {
+        return $env:GUILDSHOPSYNC_WOWPATH
+    }
+
+    # 3. Try common TurtleWoW paths
+    $commonPaths = @(
+        "C:\turtlewow",
+        "D:\turtlewow",
+        "C:\Games\turtlewow",
+        "D:\Games\turtlewow",
+        "$env:USERPROFILE\Documents\turtlewow",
+        "C:\Program Files\turtlewow",
+        "C:\Program Files (x86)\turtlewow"
+    )
+
+    foreach ($path in $commonPaths) {
+        if (Test-Path "$path\WoW.exe") {
+            return $path
+        }
+    }
+
+    return $null
+}
+
+$WoWPath = Get-WoWPath
+if (-not $WoWPath) {
+    # Log error and exit - no valid WoW installation found
+    $errorLog = "$env:LOCALAPPDATA\GuildShopSync\error.log"
+    New-Item -ItemType Directory -Path (Split-Path $errorLog) -Force -ErrorAction SilentlyContinue | Out-Null
+    "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') - ERROR: Could not find TurtleWoW installation. Please reinstall GuildShopSync." | Out-File $errorLog -Append
+    exit 1
+}
+
+$WatchPath = "$WoWPath\WTF\Account"
+
+# Verify WatchPath exists
+if (-not (Test-Path $WatchPath)) {
+    $errorLog = "$env:LOCALAPPDATA\GuildShopSync\error.log"
+    New-Item -ItemType Directory -Path (Split-Path $errorLog) -Force -ErrorAction SilentlyContinue | Out-Null
+    "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') - ERROR: WTF\Account folder not found at $WatchPath" | Out-File $errorLog -Append
+    exit 1
+}
 
 Add-Type -AssemblyName System.Windows.Forms
 

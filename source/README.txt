@@ -1,5 +1,5 @@
 ========================================
-   GUILD SHOP PRICE SYNC
+   GUILD SHOP PRICE SYNC v2.6
    Thralls Book Club
 ========================================
 

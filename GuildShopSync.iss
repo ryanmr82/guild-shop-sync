@@ -2,7 +2,7 @@
 ; Inno Setup 6.x
 
 #define MyAppName "GuildShopSync"
-#define MyAppVersion "2.5"
+#define MyAppVersion "2.6"
 #define MyAppPublisher "Thralls Book Club"
 #define MyAppURL "https://tbcguild.duckdns.org/consumes"
 
@@ -45,33 +45,42 @@ Name: "{group}\{#MyAppName} README"; Filename: "{app}\README.txt"
 Name: "{group}\Uninstall {#MyAppName}"; Filename: "{uninstallexe}"
 
 [Registry]
-; Store WoW path for the sync service
+; Store WoW path for the sync service (PRIMARY method - used by v2.6+)
 Root: HKCU; Subkey: "Software\{#MyAppName}"; ValueType: string; ValueName: "WoWPath"; ValueData: "{code:GetWoWPath}"; Flags: uninsdeletekey
 Root: HKCU; Subkey: "Software\{#MyAppName}"; ValueType: string; ValueName: "Version"; ValueData: "{#MyAppVersion}"; Flags: uninsdeletekey
 
 [Run]
+; Kill any existing sync processes before we start
+Filename: "taskkill"; Parameters: "/f /im powershell.exe /fi ""WINDOWTITLE eq *GuildShopSync*"""; Flags: runhidden waituntilterminated; StatusMsg: "Stopping any running sync processes..."
+
+; Remove old scheduled task if exists (clean slate)
+Filename: "schtasks"; Parameters: "/delete /tn ""GuildShopSync"" /f"; Flags: runhidden waituntilterminated; StatusMsg: "Removing old scheduled task..."
+
 ; Install the addon to WoW folder
-Filename: "xcopy"; Parameters: """{app}\Addon\*"" ""{code:GetWoWPath}\Interface\AddOns\GuildShopSync\"" /E /I /Y"; Flags: runhidden waituntilterminated
+Filename: "xcopy"; Parameters: """{app}\Addon\*"" ""{code:GetWoWPath}\Interface\AddOns\GuildShopSync\"" /E /I /Y"; Flags: runhidden waituntilterminated; StatusMsg: "Installing addon to WoW folder..."
 
 ; Create scheduled task for auto-sync (runs at user logon)
-Filename: "schtasks"; Parameters: "/create /tn ""GuildShopSync"" /tr ""powershell.exe -ExecutionPolicy Bypass -WindowStyle Hidden -File '{app}\SyncService.ps1'"" /sc onlogon /rl limited /f"; Flags: runhidden waituntilterminated
-
-; Set environment variable for sync service
-Filename: "setx"; Parameters: "GUILDSHOPSYNC_WOWPATH ""{code:GetWoWPath}"""; Flags: runhidden waituntilterminated
+Filename: "schtasks"; Parameters: "/create /tn ""GuildShopSync"" /tr ""powershell.exe -ExecutionPolicy Bypass -WindowStyle Hidden -File '{app}\SyncService.ps1'"" /sc onlogon /rl limited /f"; Flags: runhidden waituntilterminated; StatusMsg: "Creating auto-start task..."
 
 ; Start the sync service now
-Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -WindowStyle Hidden -File ""{app}\SyncService.ps1"""; Flags: runhidden nowait
+Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -WindowStyle Hidden -File ""{app}\SyncService.ps1"""; Flags: runhidden nowait postinstall; StatusMsg: "Starting sync service..."
 
 [UninstallRun]
 ; Stop and remove scheduled task
 Filename: "schtasks"; Parameters: "/delete /tn ""GuildShopSync"" /f"; Flags: runhidden waituntilterminated
 
 ; Kill any running sync process
-Filename: "taskkill"; Parameters: "/f /im powershell.exe /fi ""WINDOWTITLE eq GuildShopSync*"""; Flags: runhidden
+Filename: "taskkill"; Parameters: "/f /im powershell.exe /fi ""WINDOWTITLE eq *GuildShopSync*"""; Flags: runhidden
+
+; Remove old environment variable if exists (cleanup from v2.5)
+Filename: "cmd"; Parameters: "/c REG delete ""HKCU\Environment"" /v GUILDSHOPSYNC_WOWPATH /f"; Flags: runhidden
 
 [UninstallDelete]
 ; Remove addon from WoW folder
 Type: filesandordirs; Name: "{code:GetWoWPath}\Interface\AddOns\GuildShopSync"
+
+; Remove error log folder
+Type: filesandordirs; Name: "{localappdata}\GuildShopSync"
 
 [Code]
 var
@@ -85,10 +94,21 @@ end;
 
 function DetectWoWPath: String;
 var
-  TestPaths: array[0..4] of String;
+  TestPaths: array[0..6] of String;
   i: Integer;
+  RegPath: String;
 begin
   Result := '';
+
+  // First check if we have a previous install with saved path
+  if RegQueryStringValue(HKCU, 'Software\GuildShopSync', 'WoWPath', RegPath) then
+  begin
+    if DirExists(RegPath) and FileExists(RegPath + '\WoW.exe') then
+    begin
+      Result := RegPath;
+      Exit;
+    end;
+  end;
 
   // Common TurtleWoW installation paths
   TestPaths[0] := 'C:\turtlewow';
@@ -96,8 +116,10 @@ begin
   TestPaths[2] := 'C:\Games\turtlewow';
   TestPaths[3] := 'D:\Games\turtlewow';
   TestPaths[4] := ExpandConstant('{userdocs}') + '\turtlewow';
+  TestPaths[5] := 'C:\Program Files\turtlewow';
+  TestPaths[6] := 'C:\Program Files (x86)\turtlewow';
 
-  for i := 0 to 4 do
+  for i := 0 to 6 do
   begin
     if DirExists(TestPaths[i]) and FileExists(TestPaths[i] + '\WoW.exe') then
     begin
@@ -107,20 +129,45 @@ begin
   end;
 end;
 
+procedure CleanupOldInstallation;
+var
+  ResultCode: Integer;
+  OldStartupVbs: String;
+begin
+  // Kill any running PowerShell processes that might be our sync service
+  Exec('taskkill', '/f /im powershell.exe /fi "WINDOWTITLE eq *GuildShopSync*"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+
+  // Remove old scheduled task if exists
+  Exec('schtasks', '/delete /tn "GuildShopSync" /f', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+
+  // Clean up old environment variable from v2.5 and earlier
+  Exec('cmd', '/c REG delete "HKCU\Environment" /v GUILDSHOPSYNC_WOWPATH /f', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+
+  // Remove old VBS startup scripts that might exist from manual installations
+  OldStartupVbs := ExpandConstant('{userstartup}') + '\GuildShopSync.vbs';
+  if FileExists(OldStartupVbs) then
+    DeleteFile(OldStartupVbs);
+end;
+
 function CheckPreviousInstall: Boolean;
 var
   UninstallKey: String;
   UninstallString: String;
   ResultCode: Integer;
+  PrevVersion: String;
 begin
   Result := True;
   UninstallKey := 'Software\Microsoft\Windows\CurrentVersion\Uninstall\{8F4E5A2B-1C3D-4E5F-A6B7-C8D9E0F1A2B3}_is1';
 
+  // Check for previous installer-based installation
   if RegQueryStringValue(HKLM, UninstallKey, 'UninstallString', UninstallString) or
      RegQueryStringValue(HKCU, UninstallKey, 'UninstallString', UninstallString) then
   begin
-    if MsgBox('A previous version of GuildShopSync is installed.' + #13#10 + #13#10 +
-              'It will be automatically removed before installing the new version.' + #13#10 + #13#10 +
+    // Get previous version
+    RegQueryStringValue(HKCU, 'Software\GuildShopSync', 'Version', PrevVersion);
+
+    if MsgBox('A previous version of GuildShopSync (' + PrevVersion + ') is installed.' + #13#10 + #13#10 +
+              'It will be automatically removed before installing version {#MyAppVersion}.' + #13#10 + #13#10 +
               'Continue?', mbConfirmation, MB_YESNO) = IDYES then
     begin
       // Run the uninstaller silently
@@ -130,6 +177,11 @@ begin
     end
     else
       Result := False;
+  end
+  else
+  begin
+    // No previous installer found, but still clean up any manual installations
+    CleanupOldInstallation;
   end;
 end;
 
