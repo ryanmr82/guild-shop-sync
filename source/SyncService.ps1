@@ -1,4 +1,4 @@
-# GuildShopSync Background Service v2.6
+# GuildShopSync Background Service v2.7
 # Watches for price scans and automatically uploads to guild website
 
 $ApiUrl = "https://tbcguild.duckdns.org/api/consumes/prices"

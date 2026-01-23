@@ -2,7 +2,7 @@
 ; Inno Setup 6.x
 
 #define MyAppName "GuildShopSync"
-#define MyAppVersion "2.6"
+#define MyAppVersion "2.7"
 #define MyAppPublisher "Thralls Book Club"
 #define MyAppURL "https://tbcguild.duckdns.org/consumes"
 
@@ -60,7 +60,10 @@ Filename: "schtasks"; Parameters: "/delete /tn ""GuildShopSync"" /f"; Flags: run
 Filename: "xcopy"; Parameters: """{app}\Addon\*"" ""{code:GetWoWPath}\Interface\AddOns\GuildShopSync\"" /E /I /Y"; Flags: runhidden waituntilterminated; StatusMsg: "Installing addon to WoW folder..."
 
 ; Create scheduled task for auto-sync (runs at user logon)
-Filename: "schtasks"; Parameters: "/create /tn ""GuildShopSync"" /tr ""powershell.exe -ExecutionPolicy Bypass -WindowStyle Hidden -File '{app}\SyncService.ps1'"" /sc onlogon /rl limited /f"; Flags: runhidden waituntilterminated; StatusMsg: "Creating auto-start task..."
+Filename: "schtasks"; Parameters: "/create /tn ""GuildShopSync"" /tr ""powershell.exe -ExecutionPolicy Bypass -WindowStyle Hidden -File '{app}\SyncService.ps1'"" /sc onlogon /delay 0000:30 /rl limited /f"; Flags: runhidden waituntilterminated; StatusMsg: "Creating auto-start task..."
+; Configure task to run on battery power (v2.7 fix: works on laptops unplugged)
+Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -Command ""$task = Get-ScheduledTask -TaskName 'GuildShopSync' -ErrorAction SilentlyContinue; if ($task) {{ $settings = $task.Settings; $settings.DisallowStartIfOnBatteries = $false; $settings.StopIfGoingOnBatteries = $false; Set-ScheduledTask -TaskName 'GuildShopSync' -Settings $settings }}"""; Flags: runhidden waituntilterminated; StatusMsg: "Configuring battery settings..."
+
 
 ; Start the sync service now
 Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -WindowStyle Hidden -File ""{app}\SyncService.ps1"""; Flags: runhidden nowait postinstall; StatusMsg: "Starting sync service..."
