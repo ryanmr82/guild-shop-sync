@@ -2,7 +2,7 @@
 ; Inno Setup 6.x
 
 #define MyAppName "GuildShopSync"
-#define MyAppVersion "2.7"
+#define MyAppVersion "2.9"
 #define MyAppPublisher "Thralls Book Club"
 #define MyAppURL "https://tbcguild.duckdns.org/consumes"
 
@@ -34,6 +34,8 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 [Files]
 ; Main program files
 Source: "source\SyncService.ps1"; DestDir: "{app}"; Flags: ignoreversion
+Source: "source\SetupTask.ps1"; DestDir: "{app}"; Flags: ignoreversion
+Source: "source\KillSyncService.ps1"; DestDir: "{app}"; Flags: ignoreversion
 Source: "source\README.txt"; DestDir: "{app}"; Flags: ignoreversion
 
 ; Addon files - will be copied to WoW folder during install
@@ -51,29 +53,24 @@ Root: HKCU; Subkey: "Software\{#MyAppName}"; ValueType: string; ValueName: "Vers
 
 [Run]
 ; Kill any existing sync processes before we start
-Filename: "taskkill"; Parameters: "/f /im powershell.exe /fi ""WINDOWTITLE eq *GuildShopSync*"""; Flags: runhidden waituntilterminated; StatusMsg: "Stopping any running sync processes..."
-
-; Remove old scheduled task if exists (clean slate)
-Filename: "schtasks"; Parameters: "/delete /tn ""GuildShopSync"" /f"; Flags: runhidden waituntilterminated; StatusMsg: "Removing old scheduled task..."
+Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\KillSyncService.ps1"""; Flags: runhidden waituntilterminated; StatusMsg: "Stopping any running sync processes..."
 
 ; Install the addon to WoW folder
 Filename: "xcopy"; Parameters: """{app}\Addon\*"" ""{code:GetWoWPath}\Interface\AddOns\GuildShopSync\"" /E /I /Y"; Flags: runhidden waituntilterminated; StatusMsg: "Installing addon to WoW folder..."
 
-; Create scheduled task for auto-sync (runs at user logon)
-Filename: "schtasks"; Parameters: "/create /tn ""GuildShopSync"" /tr ""powershell.exe -ExecutionPolicy Bypass -WindowStyle Hidden -File '{app}\SyncService.ps1'"" /sc onlogon /delay 0000:30 /rl limited /f"; Flags: runhidden waituntilterminated; StatusMsg: "Creating auto-start task..."
-; Configure task to run on battery power (v2.7 fix: works on laptops unplugged)
-Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -Command ""$task = Get-ScheduledTask -TaskName 'GuildShopSync' -ErrorAction SilentlyContinue; if ($task) {{ $settings = $task.Settings; $settings.DisallowStartIfOnBatteries = $false; $settings.StopIfGoingOnBatteries = $false; Set-ScheduledTask -TaskName 'GuildShopSync' -Settings $settings }}"""; Flags: runhidden waituntilterminated; StatusMsg: "Configuring battery settings..."
-
+; Create scheduled task using SetupTask.ps1 (v2.8: uses Register-ScheduledTask for full settings control)
+; Runs under admin elevation from installer - sets battery, restart, time limit, etc.
+Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\SetupTask.ps1"" -ServicePath ""{app}\SyncService.ps1"""; Flags: runhidden waituntilterminated; StatusMsg: "Creating auto-start task with correct settings..."
 
 ; Start the sync service now
 Filename: "powershell.exe"; Parameters: "-ExecutionPolicy Bypass -WindowStyle Hidden -File ""{app}\SyncService.ps1"""; Flags: runhidden nowait postinstall; StatusMsg: "Starting sync service..."
 
 [UninstallRun]
 ; Stop and remove scheduled task
-Filename: "schtasks"; Parameters: "/delete /tn ""GuildShopSync"" /f"; Flags: runhidden waituntilterminated
+Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -Command ""Unregister-ScheduledTask -TaskName 'GuildShopSync' -Confirm:$false -ErrorAction SilentlyContinue"""; Flags: runhidden waituntilterminated
 
 ; Kill any running sync process
-Filename: "taskkill"; Parameters: "/f /im powershell.exe /fi ""WINDOWTITLE eq *GuildShopSync*"""; Flags: runhidden
+Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\KillSyncService.ps1"""; Flags: runhidden waituntilterminated
 
 ; Remove old environment variable if exists (cleanup from v2.5)
 Filename: "cmd"; Parameters: "/c REG delete ""HKCU\Environment"" /v GUILDSHOPSYNC_WOWPATH /f"; Flags: runhidden
@@ -138,7 +135,7 @@ var
   OldStartupVbs: String;
 begin
   // Kill any running PowerShell processes that might be our sync service
-  Exec('taskkill', '/f /im powershell.exe /fi "WINDOWTITLE eq *GuildShopSync*"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  Exec('powershell.exe', '-NoProfile -ExecutionPolicy Bypass -Command "Get-WmiObject Win32_Process -Filter ""Name=''powershell.exe''"" -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -match ''SyncService'' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }; Start-Sleep -Seconds 1"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
 
   // Remove old scheduled task if exists
   Exec('schtasks', '/delete /tn "GuildShopSync" /f', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
@@ -241,4 +238,13 @@ begin
     if not DirExists(WoWPath + '\Interface\AddOns') then
       ForceDirectories(WoWPath + '\Interface\AddOns');
   end;
+end;
+
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+var
+  ResultCode: Integer;
+begin
+  Result := '';
+  // Kill running SyncService BEFORE files are overwritten so mutex is released
+  Exec('powershell.exe', '-NoProfile -ExecutionPolicy Bypass -Command "Get-WmiObject Win32_Process -Filter ""Name=''powershell.exe''"" -ErrorAction SilentlyContinue | Where-Object { $_.CommandLine -match ''SyncService'' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }; Start-Sleep -Seconds 2"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
 end;
