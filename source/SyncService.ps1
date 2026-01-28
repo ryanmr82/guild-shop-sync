@@ -1,11 +1,31 @@
-# GuildShopSync Background Service v2.7
+# GuildShopSync Background Service v2.9
 # Watches for price scans and automatically uploads to guild website
+# System tray icon for status visibility
 
 $ApiUrl = "https://tbcguild.duckdns.org/api/consumes/prices"
+$LogDir = "$env:LOCALAPPDATA\GuildShopSync"
+$LogFile = "$LogDir\service.log"
 
-# Get WoW path - try multiple sources for reliability
+# Ensure log directory exists
+New-Item -ItemType Directory -Path $LogDir -Force -ErrorAction SilentlyContinue | Out-Null
+
+# ===== Single Instance Check =====
+# Prevent duplicate tray icons by ensuring only one SyncService can run at a time.
+# Uses a named mutex - if another instance already holds it, this one exits immediately.
+$mutex = New-Object System.Threading.Mutex($false, "Global\GuildShopSyncService")
+if (-not $mutex.WaitOne(0)) {
+    # Another instance is already running - exit silently
+    exit 0
+}
+
+function Write-Log {
+    param([string]$Message)
+    $timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
+    "$timestamp - $Message" | Out-File $LogFile -Append -ErrorAction SilentlyContinue
+}
+
+# ===== Get WoW Path =====
 function Get-WoWPath {
-    # 1. Try Registry first (set by installer)
     try {
         $regPath = Get-ItemProperty -Path "HKCU:\Software\GuildShopSync" -Name "WoWPath" -ErrorAction SilentlyContinue
         if ($regPath -and $regPath.WoWPath -and (Test-Path $regPath.WoWPath)) {
@@ -13,12 +33,10 @@ function Get-WoWPath {
         }
     } catch {}
 
-    # 2. Try environment variable (legacy)
     if ($env:GUILDSHOPSYNC_WOWPATH -and (Test-Path $env:GUILDSHOPSYNC_WOWPATH)) {
         return $env:GUILDSHOPSYNC_WOWPATH
     }
 
-    # 3. Try common TurtleWoW paths
     $commonPaths = @(
         "C:\turtlewow",
         "D:\turtlewow",
@@ -38,40 +56,7 @@ function Get-WoWPath {
     return $null
 }
 
-$WoWPath = Get-WoWPath
-if (-not $WoWPath) {
-    # Log error and exit - no valid WoW installation found
-    $errorLog = "$env:LOCALAPPDATA\GuildShopSync\error.log"
-    New-Item -ItemType Directory -Path (Split-Path $errorLog) -Force -ErrorAction SilentlyContinue | Out-Null
-    "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') - ERROR: Could not find TurtleWoW installation. Please reinstall GuildShopSync." | Out-File $errorLog -Append
-    exit 1
-}
-
-$WatchPath = "$WoWPath\WTF\Account"
-
-# Verify WatchPath exists
-if (-not (Test-Path $WatchPath)) {
-    $errorLog = "$env:LOCALAPPDATA\GuildShopSync\error.log"
-    New-Item -ItemType Directory -Path (Split-Path $errorLog) -Force -ErrorAction SilentlyContinue | Out-Null
-    "$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss') - ERROR: WTF\Account folder not found at $WatchPath" | Out-File $errorLog -Append
-    exit 1
-}
-
-Add-Type -AssemblyName System.Windows.Forms
-
-function Show-Notification {
-    param([string]$Title, [string]$Message, [string]$Type = "Info")
-
-    $balloon = New-Object System.Windows.Forms.NotifyIcon
-    $balloon.Icon = [System.Drawing.SystemIcons]::Information
-    $balloon.BalloonTipTitle = $Title
-    $balloon.BalloonTipText = $Message
-    $balloon.Visible = $true
-    $balloon.ShowBalloonTip(5000)
-    Start-Sleep -Seconds 6
-    $balloon.Dispose()
-}
-
+# ===== Upload Logic =====
 function Upload-Prices {
     param([string]$FilePath)
 
@@ -80,8 +65,11 @@ function Upload-Prices {
     $content = Get-Content $FilePath -Raw -ErrorAction SilentlyContinue
     if (-not $content) { return }
 
-    # Check for trigger flag
     if ($content -notmatch '\["triggerUpload"\]\s*=\s*true') { return }
+
+    # Update tray status
+    $script:statusItem.Text = "Status: Uploading prices..."
+    $script:trayIcon.Text = "GuildShopSync - Uploading..."
 
     # Extract prices
     $prices = @{}
@@ -94,9 +82,12 @@ function Upload-Prices {
         }
     }
 
-    if ($prices.Count -eq 0) { return }
+    if ($prices.Count -eq 0) {
+        $script:statusItem.Text = "Status: Watching for price scans"
+        $script:trayIcon.Text = "GuildShopSync - Watching for scans"
+        return
+    }
 
-    # Upload to website
     $payload = @{
         prices = $prices
         source = "GuildShopSync-addon"
@@ -107,46 +98,150 @@ function Upload-Prices {
         $response = Invoke-RestMethod -Uri $ApiUrl -Method Put -ContentType "application/json" -Body $payload -TimeoutSec 30
 
         if ($response.success) {
-            # Clear trigger flag
             $content = $content -replace '\["triggerUpload"\]\s*=\s*true', '["triggerUpload"] = false'
             $content | Set-Content $FilePath -NoNewline
 
-            # Show success notification
-            Show-Notification -Title "Guild Shop Sync" -Message "Uploaded $($prices.Count) prices to guild website!"
+            $script:uploadCount++
+            $script:lastUploadTime = (Get-Date -Format 'h:mm tt')
+            $script:statusItem.Text = "Status: Watching for price scans"
+            $script:lastUploadItem.Text = "Last Upload: $($script:lastUploadTime)"
+            $script:countItem.Text = "Uploads This Session: $($script:uploadCount)"
+            $script:trayIcon.Text = "GuildShopSync - Last upload: $($script:lastUploadTime)"
+
+            Write-Log "Uploaded $($prices.Count) prices successfully"
+
+            $script:trayIcon.BalloonTipTitle = "Guild Shop Sync"
+            $script:trayIcon.BalloonTipText = "Uploaded $($prices.Count) prices to guild website!"
+            $script:trayIcon.BalloonTipIcon = [System.Windows.Forms.ToolTipIcon]::Info
+            $script:trayIcon.ShowBalloonTip(5000)
         }
     } catch {
-        Show-Notification -Title "Guild Shop Sync" -Message "Upload failed. Check internet connection." -Type "Error"
+        $script:statusItem.Text = "Status: Upload failed - retrying on next scan"
+        $script:trayIcon.Text = "GuildShopSync - Upload failed"
+        Write-Log "Upload failed: $_"
+
+        $script:trayIcon.BalloonTipTitle = "Guild Shop Sync"
+        $script:trayIcon.BalloonTipText = "Upload failed. Check internet connection."
+        $script:trayIcon.BalloonTipIcon = [System.Windows.Forms.ToolTipIcon]::Error
+        $script:trayIcon.ShowBalloonTip(5000)
     }
 }
 
-# Find SavedVariables files
-$svFiles = Get-ChildItem -Path $WatchPath -Recurse -Filter "GuildShopSync.lua" -ErrorAction SilentlyContinue
-if ($svFiles.Count -eq 0) {
-    # No saved variables yet - wait for first scan
-    while ($true) {
-        Start-Sleep -Seconds 10
-        $svFiles = Get-ChildItem -Path $WatchPath -Recurse -Filter "GuildShopSync.lua" -ErrorAction SilentlyContinue
-        if ($svFiles.Count -gt 0) { break }
-    }
+# ===== Initialize =====
+
+$WoWPath = Get-WoWPath
+if (-not $WoWPath) {
+    Write-Log "ERROR: Could not find TurtleWoW installation. Please reinstall GuildShopSync."
+    exit 1
 }
 
-# Watch all found SavedVariables directories
-$watchers = @()
-foreach ($svFile in $svFiles) {
-    $watcher = New-Object System.IO.FileSystemWatcher
-    $watcher.Path = $svFile.DirectoryName
-    $watcher.Filter = "GuildShopSync.lua"
-    $watcher.NotifyFilter = [System.IO.NotifyFilters]::LastWrite
-    $watcher.EnableRaisingEvents = $true
+$WatchPath = "$WoWPath\WTF\Account"
 
-    $action = {
-        Start-Sleep -Milliseconds 1000
-        Upload-Prices -FilePath $Event.SourceEventArgs.FullPath
-    }
-
-    Register-ObjectEvent $watcher "Changed" -Action $action | Out-Null
-    $watchers += $watcher
+if (-not (Test-Path $WatchPath)) {
+    Write-Log "ERROR: WTF\Account folder not found at $WatchPath"
+    exit 1
 }
 
-# Keep running
-while ($true) { Start-Sleep -Seconds 60 }
+Write-Log "Service started. WoW path: $WoWPath"
+
+# ===== System Tray Icon =====
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName System.Drawing
+
+# Create a green circle icon (running indicator)
+$bmp = New-Object System.Drawing.Bitmap(16, 16)
+$g = [System.Drawing.Graphics]::FromImage($bmp)
+$g.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
+$g.Clear([System.Drawing.Color]::Transparent)
+$g.FillEllipse([System.Drawing.Brushes]::LimeGreen, 1, 1, 14, 14)
+$g.DrawEllipse([System.Drawing.Pens]::DarkGreen, 1, 1, 13, 13)
+$g.Dispose()
+
+$script:lastUploadTime = "Never"
+$script:uploadCount = 0
+
+$script:trayIcon = New-Object System.Windows.Forms.NotifyIcon
+$script:trayIcon.Icon = [System.Drawing.Icon]::FromHandle($bmp.GetHicon())
+$script:trayIcon.Text = "GuildShopSync - Watching for scans"
+$script:trayIcon.Visible = $true
+
+# Context menu
+$contextMenu = New-Object System.Windows.Forms.ContextMenuStrip
+
+$headerItem = $contextMenu.Items.Add("GuildShopSync v2.9")
+$headerItem.Enabled = $false
+$headerItem.Font = New-Object System.Drawing.Font($headerItem.Font, [System.Drawing.FontStyle]::Bold)
+
+$contextMenu.Items.Add("-") | Out-Null
+
+$script:statusItem = $contextMenu.Items.Add("Status: Watching for price scans")
+$script:statusItem.Enabled = $false
+
+$script:lastUploadItem = $contextMenu.Items.Add("Last Upload: Never")
+$script:lastUploadItem.Enabled = $false
+
+$script:countItem = $contextMenu.Items.Add("Uploads This Session: 0")
+$script:countItem.Enabled = $false
+
+$contextMenu.Items.Add("-") | Out-Null
+
+$openLogItem = $contextMenu.Items.Add("Open Log Folder")
+$openLogItem.add_Click({
+    if (Test-Path $LogDir) {
+        Start-Process explorer.exe $LogDir
+    }
+})
+
+$contextMenu.Items.Add("-") | Out-Null
+
+$exitItem = $contextMenu.Items.Add("Exit (restarts in ~1 min)")
+$exitItem.add_Click({
+    Write-Log "Service stopped by user via tray menu"
+    $script:trayIcon.Visible = $false
+    $script:trayIcon.Dispose()
+    [System.Windows.Forms.Application]::Exit()
+})
+
+$script:trayIcon.ContextMenuStrip = $contextMenu
+
+# Double-click shows status balloon
+$script:trayIcon.add_DoubleClick({
+    $script:trayIcon.BalloonTipTitle = "GuildShopSync"
+    $script:trayIcon.BalloonTipText = "Watching for price scans`nLast upload: $($script:lastUploadTime)`nUploads this session: $($script:uploadCount)"
+    $script:trayIcon.BalloonTipIcon = [System.Windows.Forms.ToolTipIcon]::Info
+    $script:trayIcon.ShowBalloonTip(5000)
+})
+
+# ===== File Watcher =====
+# Poll for SavedVariables changes on the UI thread (Timer instead of FileSystemWatcher).
+# This ensures Upload-Prices can update the tray icon, counters, and balloon tips
+# since it runs in the main script scope with full access to $script: variables.
+$script:lastPollHashes = @{}
+$pollTimer = New-Object System.Windows.Forms.Timer
+$pollTimer.Interval = 3000  # Check every 3 seconds
+$pollTimer.add_Tick({
+    $svFiles = Get-ChildItem -Path $WatchPath -Recurse -Filter "GuildShopSync.lua" -ErrorAction SilentlyContinue
+    foreach ($f in $svFiles) {
+        $currentWrite = $f.LastWriteTime.Ticks
+        $lastWrite = $script:lastPollHashes[$f.FullName]
+        if ($lastWrite -ne $currentWrite) {
+            $script:lastPollHashes[$f.FullName] = $currentWrite
+            if ($lastWrite) {  # Skip first detection (initial scan)
+                Upload-Prices -FilePath $f.FullName
+            }
+        }
+    }
+})
+$pollTimer.Start()
+
+Write-Log "Polling $WatchPath for GuildShopSync.lua changes (3s interval)"
+
+# ===== Run Message Loop =====
+# Application.Run processes Windows messages to keep tray icon responsive
+$appContext = New-Object System.Windows.Forms.ApplicationContext
+[System.Windows.Forms.Application]::Run($appContext)
+
+# Cleanup
+$script:trayIcon.Visible = $false
+$script:trayIcon.Dispose()
+Write-Log "Service stopped"
