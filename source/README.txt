@@ -1,5 +1,5 @@
 ========================================
-   GUILD SHOP PRICE SYNC v2.9
+   GUILD SHOP PRICE SYNC v3.0
    Thralls Book Club
 ========================================
 
@@ -9,8 +9,8 @@ Scans Auction House prices in-game and
 automatically updates the guild website
 so everyone sees current prices.
 
-SYSTEM TRAY ICON (New in v2.9):
--------------------------------
+SYSTEM TRAY ICON:
+-----------------
 A green circle icon appears in the system
 tray (bottom-right near the clock) when
 the service is running.
@@ -19,6 +19,15 @@ the service is running.
 - Double-click: Show status balloon
 - If the icon is missing, the service has
   stopped. It will auto-restart in ~1 minute.
+
+WHAT'S NEW IN v3.0:
+-------------------
+- Fixed scheduled task creation bug that
+  could prevent the service from surviving
+  PC reboots on some systems
+- Improved error handling with fallback
+  methods for task registration
+- Task creation now verifies success
 
 
 HOW TO USE (after installing):

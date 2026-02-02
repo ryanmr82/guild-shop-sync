@@ -1,4 +1,4 @@
--- GuildShopSync v2.5
+-- GuildShopSync v3.0
 
 local scanning = false
 local scanIndex = 0
@@ -248,7 +248,7 @@ f:SetScript("OnEvent", function()
         if not GuildShopSyncDB.prices then
             GuildShopSyncDB.prices = {}
         end
-        Msg("v2.5 loaded - /gss help")
+        Msg("v3.0 loaded - /gss help")
     end
     if event == "AUCTION_HOUSE_SHOW" then
         MakeButton()

@@ -1,6 +1,7 @@
-# GuildShopSync Background Service v2.9
+# GuildShopSync Background Service v3.0
 # Watches for price scans and automatically uploads to guild website
 # System tray icon for status visibility
+# v3.0: Fixed scheduled task creation (SetupTask.ps1 bug fix)
 
 $ApiUrl = "https://tbcguild.duckdns.org/api/consumes/prices"
 $LogDir = "$env:LOCALAPPDATA\GuildShopSync"
@@ -168,7 +169,7 @@ $script:trayIcon.Visible = $true
 # Context menu
 $contextMenu = New-Object System.Windows.Forms.ContextMenuStrip
 
-$headerItem = $contextMenu.Items.Add("GuildShopSync v2.9")
+$headerItem = $contextMenu.Items.Add("GuildShopSync v3.0")
 $headerItem.Enabled = $false
 $headerItem.Font = New-Object System.Drawing.Font($headerItem.Font, [System.Drawing.FontStyle]::Bold)
 

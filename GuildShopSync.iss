@@ -2,7 +2,7 @@
 ; Inno Setup 6.x
 
 #define MyAppName "GuildShopSync"
-#define MyAppVersion "2.9"
+#define MyAppVersion "3.0"
 #define MyAppPublisher "Thralls Book Club"
 #define MyAppURL "https://tbcguild.duckdns.org/consumes"
 
@@ -58,7 +58,7 @@ Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -Fil
 ; Install the addon to WoW folder
 Filename: "xcopy"; Parameters: """{app}\Addon\*"" ""{code:GetWoWPath}\Interface\AddOns\GuildShopSync\"" /E /I /Y"; Flags: runhidden waituntilterminated; StatusMsg: "Installing addon to WoW folder..."
 
-; Create scheduled task using SetupTask.ps1 (v2.8: uses Register-ScheduledTask for full settings control)
+; Create scheduled task using SetupTask.ps1 (v3.0: fixed user identity, error handling, fallback)
 ; Runs under admin elevation from installer - sets battery, restart, time limit, etc.
 Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -File ""{app}\SetupTask.ps1"" -ServicePath ""{app}\SyncService.ps1"""; Flags: runhidden waituntilterminated; StatusMsg: "Creating auto-start task with correct settings..."
 
